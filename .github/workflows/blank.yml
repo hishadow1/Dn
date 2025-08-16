@@ -37,7 +37,7 @@ jobs:
       - name: Restore backup files (safe)
         run: |
           if [ -f ./backup/backup.zip ]; then
-            sudo unzip -o ./backup/backup.zip -d / || true
+            sudo unzip -o ./backup/backup.zip -d /
             echo "VPS backup restored"
           else
             echo "No backup found, starting fresh"
@@ -46,10 +46,10 @@ jobs:
       - name: Restore Tailscale state (safe)
         run: |
           if [ -f ./backup/data/tailscaled.state ]; then
-            sudo mkdir -p /var/lib/tailscale || true
-            sudo cp -f ./backup/data/tailscaled.state /var/lib/tailscale/tailscaled.state || true
-            sudo chown root:root /var/lib/tailscale/tailscaled.state || true
-            sudo chmod 600 /var/lib/tailscale/tailscaled.state || true
+            sudo mkdir -p /var/lib/tailscale
+            sudo cp -f ./backup/data/tailscaled.state /var/lib/tailscale/tailscaled.state
+            sudo chown root:root /var/lib/tailscale/tailscaled.state
+            sudo chmod 600 /var/lib/tailscale/tailscaled.state
             echo "Tailscale state restored"
           else
             echo "No Tailscale state found, will start fresh"
@@ -57,20 +57,22 @@ jobs:
 
       - name: Start Tailscale
         run: |
-          sudo pkill tailscaled || true
+          if pgrep tailscaled > /dev/null; then
+            sudo pkill tailscaled
+          fi
           sudo tailscaled &
           sleep 5
           sudo tailscale up --authkey ${{ secrets.TAILSCALE_AUTHKEY }} --hostname=DarkNodes || echo "Tailscale already up"
           echo "Current Tailscale IPs:"
-          tailscale ip -4 || true
+          tailscale ip -4 || echo "IP not found"
 
       - name: Create user Darknodes with sudo
         run: |
           if ! id -u Darknodes >/dev/null 2>&1; then
-            sudo useradd -m -s /bin/bash Darknodes || true
-            echo "Darknodes:Darknodes" | sudo chpasswd || true
-            sudo usermod -aG sudo Darknodes || true
-            echo "Darknodes ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/Darknodes || true
+            sudo useradd -m -s /bin/bash Darknodes
+            echo "Darknodes:Darknodes" | sudo chpasswd
+            sudo usermod -aG sudo Darknodes
+            echo "Darknodes ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/Darknodes
           fi
 
       - name: Start tmate session for SSH access
@@ -83,44 +85,27 @@ jobs:
           echo ""
           echo "tmate SSH session info:"
           if [ -S $HOME/.tmate.sock/ssh ]; then
-            cat $HOME/.tmate.sock/ssh || true
+            cat $HOME/.tmate.sock/ssh
           else
             echo "tmate socket not ready"
           fi
 
       - name: Keep VPS alive
-        run: sleep 19800 || true  # 5 hours 30 minutes
+        run: sleep 19800  # 5 hours 30 minutes
 
       - name: Backup VPS data and Tailscale state
         run: |
-          sudo mkdir -p /opt/vps-backup/data || true
-          # Backup Tailscale state
+          sudo mkdir -p /opt/vps-backup/data
           if [ -f /var/lib/tailscale/tailscaled.state ]; then
-            sudo cp -f /var/lib/tailscale/tailscaled.state /opt/vps-backup/data/ || true
+            sudo cp -f /var/lib/tailscale/tailscaled.state /opt/vps-backup/data/
           fi
-          # Backup other directories (add your paths here if needed)
-          # sudo cp -r /path/to/data /opt/vps-backup/data/ || true
-          sudo chown -R $USER:$USER /opt/vps-backup || true
-          cd /opt/vps-backup || true
-          zip -r backup.zip ./* || true
+          sudo chown -R $USER:$USER /opt/vps-backup
+          cd /opt/vps-backup
+          zip -r backup.zip ./*
 
       - name: Upload VPS backup artifact
         uses: actions/upload-artifact@v4
         with:
           name: vps-backup
           path: /opt/vps-backup/backup.zip
-        continue-on-error: true          cd /opt/vps-backup || true
-          zip -r backup.zip ./* || true
-
-      - name: Upload VPS backup artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: vps-backup
-          path: /opt/vps-backup/backup.zip
-        continue-on-error: true          zip -r backup.zip ./*
-
-      - name: Upload VPS backup artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: vps-backup
-          path: /opt/vps-backup/backup.zip
+        continue-on-error: true

@@ -1,87 +1,111 @@
-name: Persistent DarkNodes VPS with Tailscale (Auto-Restart)
+name: Continuous Persistent VPS
 
 on:
-  workflow_dispatch:
   schedule:
-    - cron: "0 */6 * * *" # every 6 hours (~5h30m)
+    - cron: '30 */5 * * *'  # Every 5 hours 30 minutes
+  workflow_dispatch:
 
 jobs:
-  vps:
+  vps-session:
     runs-on: ubuntu-latest
-    timeout-minutes: 360 # 6 hours
+    timeout-minutes: 330  # 5 hours 30 minutes
 
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      # Restore previous Tailscale state
-      - name: Restore Tailscale state
-        uses: actions/cache@v3
-        id: tailscale-cache
+      - name: Set hostname to DarkNodes
+        run: |
+          sudo hostnamectl set-hostname DarkNodes
+
+      - name: Download VPS backup (if any)
+        uses: actions/download-artifact@v4
         with:
-          path: .vps-data/tailscale.state
-          key: tailscale-state-${{ runner.os }}
+          name: vps-backup
+          path: ./backup
+        continue-on-error: true
 
-      - name: Set hostname
-        run: sudo hostnamectl set-hostname DarkNodes
-
-      - name: Install dependencies
+      - name: Install prerequisites
         run: |
-          sudo apt-get update
-          sudo apt-get install -y curl wget iproute2 jq gnupg lsb-release
+          sudo apt update
+          sudo apt install -y tmate curl unzip sudo net-tools neofetch
 
-      - name: Install Tailscale
+      - name: Install Tailscale official script
         run: |
-          curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/$(lsb_release -cs).gpg | sudo tee /usr/share/keyrings/tailscale-archive-keyring.gpg > /dev/null
-          curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/$(lsb_release -cs).list | sudo tee /etc/apt/sources.list.d/tailscale.list
-          sudo apt-get update
-          sudo apt-get install -y tailscale
-          mkdir -p .vps-data
+          curl -fsSL https://tailscale.com/install.sh | sh
+
+      - name: Restore backup files (safe)
+        run: |
+          if [ -f ./backup/backup.zip ]; then
+            sudo unzip -o ./backup/backup.zip -d /
+            echo "VPS backup restored"
+          else
+            echo "No backup found, starting fresh"
+          fi
+
+      - name: Restore Tailscale state (safe)
+        run: |
+          if [ -f ./backup/data/tailscaled.state ]; then
+            sudo mkdir -p /var/lib/tailscale
+            sudo cp -f ./backup/data/tailscaled.state /var/lib/tailscale/tailscaled.state
+            sudo chown root:root /var/lib/tailscale/tailscaled.state
+            sudo chmod 600 /var/lib/tailscale/tailscaled.state
+            echo "Tailscale state restored"
+          else
+            echo "No Tailscale state found, will start fresh"
+          fi
 
       - name: Start Tailscale
         run: |
-          sudo tailscaled --state=$(pwd)/.vps-data/tailscale.state --socket=$(pwd)/.vps-data/tailscaled.sock --port 41641 &
-          sleep 10
-          if [ -f ".vps-data/tailscale.state" ]; then
-            echo "Restoring previous Tailscale node..."
-            sudo tailscale up --hostname=DarkNodes --accept-routes --accept-dns || true
-          else
-            echo "First run, using authkey..."
-            sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTHKEY }} --hostname=DarkNodes --accept-routes --accept-dns
+          sudo pkill tailscaled || true
+          sudo tailscaled &
+          sleep 5
+          sudo tailscale up --authkey ${{ secrets.TAILSCALE_AUTHKEY }} --hostname=DarkNodes || echo "Tailscale already up"
+          echo "Current Tailscale IPs:"
+          tailscale ip -4
+
+      - name: Create user Darknodes with sudo
+        run: |
+          if ! id -u Darknodes >/dev/null 2>&1; then
+            sudo useradd -m -s /bin/bash Darknodes
+            echo "Darknodes:Darknodes" | sudo chpasswd
+            sudo usermod -aG sudo Darknodes
+            echo "Darknodes ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/Darknodes
           fi
 
-          # Save the current IP
-          IP=$(tailscale ip -4)
-          echo $IP > DarkNodes-Latest-IP.txt
-          echo "$(date '+%Y-%m-%d %H:%M:%S') - $IP" >> DarkNodes-IP-Log.txt
-          echo "Current Tailscale IP: $IP"
+      - name: Start tmate session for SSH access
+        uses: mxschmitt/action-tmate@v3
 
-      - name: Upload IP logs
-        uses: actions/upload-artifact@v3
+      - name: Show Tailscale IP and tmate info
+        run: |
+          echo "Tailscale IP:"
+          tailscale ip -4 || echo "Tailscale IP not found"
+          echo ""
+          echo "tmate SSH session info:"
+          if [ -S $HOME/.tmate.sock/ssh ]; then
+            cat $HOME/.tmate.sock/ssh
+          else
+            echo "tmate socket not ready"
+          fi
+
+      - name: Keep VPS alive
+        run: sleep 19800  # 5 hours 30 minutes
+
+      - name: Backup VPS data and Tailscale state
+        run: |
+          sudo mkdir -p /opt/vps-backup/data
+          # Backup Tailscale state
+          if [ -f /var/lib/tailscale/tailscaled.state ]; then
+            sudo cp -f /var/lib/tailscale/tailscaled.state /opt/vps-backup/data/
+          fi
+          # Backup any other important directories (add your paths if needed)
+          # sudo cp -r /path/to/data /opt/vps-backup/data/
+          sudo chown -R $USER:$USER /opt/vps-backup
+          cd /opt/vps-backup
+          zip -r backup.zip ./*
+
+      - name: Upload VPS backup artifact
+        uses: actions/upload-artifact@v4
         with:
-          name: DarkNodes-Tailscale-IPs
-          path: |
-            DarkNodes-Latest-IP.txt
-            DarkNodes-IP-Log.txt
-
-      - name: Run VPS session for 5h30m
-        run: |
-          echo "VPS running with persistent Tailscale IP..."
-          sleep 19800 # 5h30m in seconds
-
-      - name: Backup Tailscale state
-        if: always()
-        run: |
-          echo "Saving Tailscale state..."
-          mkdir -p .vps-data
-          cp -f .vps-data/tailscale.state .vps-data/tailscale.state
-
-      - name: Auto-restart workflow
-        if: always()
-        run: |
-          echo "Restarting workflow for continuous VPS..."
-          curl -X POST \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-            https://api.github.com/repos/${{ github.repository }}/actions/workflows/${{ github.workflow }}/dispatches \
-            -d '{"ref":"main"}'
+          name: vps-backup
+          path: /opt/vps-backup/backup.zip

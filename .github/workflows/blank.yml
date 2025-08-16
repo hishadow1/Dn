@@ -1,14 +1,14 @@
-name: Continuous Persistent VPS with Tailscale
+name: Persistent DarkNodes VPS with Tailscale (Auto-Restart)
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: "*/330 * * * *" # every 5h30m
+    - cron: "0 */6 * * *" # every 6 hours (~5h30m)
 
 jobs:
   vps:
     runs-on: ubuntu-latest
-    timeout-minutes: 330 # 5h30m
+    timeout-minutes: 360 # 6 hours
 
     steps:
       - name: Checkout repo
@@ -19,46 +19,69 @@ jobs:
         uses: actions/cache@v3
         id: tailscale-cache
         with:
-          path: .vps-data
-          key: tailscale-state
+          path: .vps-data/tailscale.state
+          key: tailscale-state-${{ runner.os }}
 
       - name: Set hostname
-        run: sudo hostname biralo
+        run: sudo hostnamectl set-hostname DarkNodes
 
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y curl wget iproute2 jq
+          sudo apt-get install -y curl wget iproute2 jq gnupg lsb-release
 
       - name: Install Tailscale
         run: |
-          curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.gpg | sudo tee /usr/share/keyrings/tailscale-archive-keyring.gpg > /dev/null
-          curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.list | sudo tee /etc/apt/sources.list.d/tailscale.list
+          curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/$(lsb_release -cs).gpg | sudo tee /usr/share/keyrings/tailscale-archive-keyring.gpg > /dev/null
+          curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/$(lsb_release -cs).list | sudo tee /etc/apt/sources.list.d/tailscale.list
           sudo apt-get update
           sudo apt-get install -y tailscale
-          sudo mkdir -p .vps-data
+          mkdir -p .vps-data
 
-      - name: Start Tailscale (persistent)
+      - name: Start Tailscale
         run: |
-          sudo tailscaled --state=.vps-data/tailscale.state --socket=.vps-data/tailscaled.sock --port 41641 &
-          sleep 5
+          sudo tailscaled --state=$(pwd)/.vps-data/tailscale.state --socket=$(pwd)/.vps-data/tailscaled.sock --port 41641 &
+          sleep 10
           if [ -f ".vps-data/tailscale.state" ]; then
             echo "Restoring previous Tailscale node..."
-            sudo tailscale up --hostname=biralo --accept-routes --accept-dns
+            sudo tailscale up --hostname=DarkNodes --accept-routes --accept-dns || true
           else
             echo "First run, using authkey..."
-            sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTHKEY }} --hostname=biralo --accept-routes --accept-dns
+            sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTHKEY }} --hostname=DarkNodes --accept-routes --accept-dns
           fi
 
-      - name: Run VPS Session (5h30m)
+          # Save the current IP
+          IP=$(tailscale ip -4)
+          echo $IP > DarkNodes-Latest-IP.txt
+          echo "$(date '+%Y-%m-%d %H:%M:%S') - $IP" >> DarkNodes-IP-Log.txt
+          echo "Current Tailscale IP: $IP"
+
+      - name: Upload IP logs
+        uses: actions/upload-artifact@v3
+        with:
+          name: DarkNodes-Tailscale-IPs
+          path: |
+            DarkNodes-Latest-IP.txt
+            DarkNodes-IP-Log.txt
+
+      - name: Run VPS session for 5h30m
         run: |
-          echo "VPS is running with persistent Tailscale IP..."
+          echo "VPS running with persistent Tailscale IP..."
           sleep 19800 # 5h30m in seconds
 
-      # Crash-proof backup of Tailscale state
       - name: Backup Tailscale state
         if: always()
         run: |
           echo "Saving Tailscale state..."
           mkdir -p .vps-data
-          sudo tailscale bugreport --state=.vps-data/tailscale.state || true
+          cp -f .vps-data/tailscale.state .vps-data/tailscale.state
+
+      - name: Auto-restart workflow
+        if: always()
+        run: |
+          echo "Restarting workflow for continuous VPS..."
+          curl -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            https://api.github.com/repos/${{ github.repository }}/actions/workflows/${{ github.workflow }}/dispatches \
+            -d '{"ref":"main"}'

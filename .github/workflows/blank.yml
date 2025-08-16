@@ -1,101 +1,43 @@
-name: Continuous Persistent VPS
+name: Continuous VPS with Tailscale
 
 on:
   schedule:
-    - cron: '30 */5 * * *'  # Every 5 hours 30 minutes
+    - cron: '*/330 * * * *'   # Every 5h30m
   workflow_dispatch:
 
 jobs:
   vps-session:
     runs-on: ubuntu-latest
-    timeout-minutes: 330  # Just under 5.5 hours
+    timeout-minutes: 325   # Just under 5h30m
 
     steps:
-      - name: Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set hostname to DarkNodes
-        run: |
-          sudo hostnamectl set-hostname DarkNodes
-
-      - name: Download VPS backup (if any)
-        uses: actions/download-artifact@v4
+      - name: Restore persistent data
+        uses: actions/cache@v4
         with:
-          name: vps-backup
-          path: ./backup
-        continue-on-error: true
+          path: .vps-data
+          key: vps-data
+          restore-keys: vps-data
 
-      - name: Install prerequisites
+      - name: Install Tailscale
         run: |
-          sudo apt update
-          sudo apt install -y tmate curl unzip sudo net-tools neofetch
-
-      - name: Install Tailscale official script
-        run: |
-          curl -fsSL https://tailscale.com/install.sh | sh
-
-      - name: Restore backup files (safe)
-        run: |
-          if [ -f ./backup/backup.zip ]; then
-            unzip -o ./backup/backup.zip -d /
-          else
-            echo "No backup found, starting fresh"
-          fi
-
-      - name: Restore Tailscale state (safe)
-        run: |
-          if [ -f /opt/vps-backup/data/tailscaled.state ]; then
-            sudo mkdir -p /var/lib/tailscale
-            sudo cp -n /opt/vps-backup/data/tailscaled.state /var/lib/tailscale/tailscaled.state
-            sudo chmod 600 /var/lib/tailscale/tailscaled.state
-          fi
+          sudo apt-get update
+          sudo apt-get install -y tailscale
+          sudo mkdir -p .vps-data
 
       - name: Start Tailscale
         run: |
-          sudo tailscaled &
+          sudo tailscaled --state=.vps-data/tailscaled.state --socket=/tmp/tailscaled.sock &
           sleep 8
-          sudo tailscale up --authkey ${{ secrets.TAILSCALE_AUTHKEY }} --hostname=DarkNodes || echo "Tailscale already up"
+          sudo tailscale --socket=/tmp/tailscaled.sock up --authkey=${{ secrets.TS_KEY }} --hostname=biralo --reset
 
-      - name: Create user Darknodes with sudo
-        run: |
-          if ! id -u Darknodes >/dev/null 2>&1; then
-            sudo useradd -m -s /bin/bash Darknodes
-            echo "Darknodes:Darknodes" | sudo chpasswd
-            sudo usermod -aG sudo Darknodes
-            echo "Darknodes ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/Darknodes
-          fi
+      - name: Show Tailscale IP
+        run: sudo tailscale --socket=/tmp/tailscaled.sock ip
 
-      - name: Start tmate session for SSH access
-        uses: mxschmitt/action-tmate@v3
-
-      - name: Show Tailscale IP and tmate info
-        run: |
-          echo "Tailscale IP:"
-          tailscale ip -4 || echo "Tailscale IP not found"
-          echo ""
-          echo "tmate SSH session info:"
-          if [ -S $HOME/.tmate.sock/ssh ]; then
-            cat $HOME/.tmate.sock/ssh
-          else
-            echo "tmate socket not ready"
-          fi
-
-      - name: Sleep to keep VPS alive
-        run: sleep 19800  # 5 hours 30 minutes
-
-      - name: Backup VPS data and tailscale state (safe)
-        run: |
-          sudo mkdir -p /opt/vps-backup/data
-          if [ -f /var/lib/tailscale/tailscaled.state ]; then
-            sudo cp -n /var/lib/tailscale/tailscaled.state /opt/vps-backup/data/
-          fi
-          sudo chown -R $USER:$USER /opt/vps-backup
-          if [ -d /opt/vps-backup ]; then
-            zip -r backup.zip /opt/vps-backup
-          fi
-
-      - name: Upload VPS backup artifact
-        uses: actions/upload-artifact@v4
+      - name: Save persistent data
+        uses: actions/cache/save@v4
         with:
-          name: vps-backup
-          path: backup.zip
+          path: .vps-data
+          key: vps-data

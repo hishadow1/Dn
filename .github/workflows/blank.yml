@@ -98,10 +98,18 @@ jobs:
           if [ -f /var/lib/tailscale/tailscaled.state ]; then
             sudo cp -f /var/lib/tailscale/tailscaled.state /opt/vps-backup/data/ || true
           fi
-          # Backup any other important directories (add your paths if needed)
+          # Backup other directories (add your paths here if needed)
           # sudo cp -r /path/to/data /opt/vps-backup/data/ || true
           sudo chown -R $USER:$USER /opt/vps-backup || true
           cd /opt/vps-backup || true
+          zip -r backup.zip ./* || true
+
+      - name: Upload VPS backup artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vps-backup
+          path: /opt/vps-backup/backup.zip
+        continue-on-error: true          cd /opt/vps-backup || true
           zip -r backup.zip ./* || true
 
       - name: Upload VPS backup artifact

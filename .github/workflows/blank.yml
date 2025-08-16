@@ -16,7 +16,7 @@ jobs:
 
       - name: Set hostname to DarkNodes
         run: |
-          sudo hostnamectl set-hostname DarkNodes
+          sudo hostnamectl set-hostname DarkNodes || true
 
       - name: Download VPS backup (if any)
         uses: actions/download-artifact@v4
@@ -27,17 +27,17 @@ jobs:
 
       - name: Install prerequisites
         run: |
-          sudo apt update
-          sudo apt install -y tmate curl unzip sudo net-tools neofetch
+          sudo apt update || true
+          sudo apt install -y tmate curl unzip sudo net-tools neofetch || true
 
       - name: Install Tailscale official script
         run: |
-          curl -fsSL https://tailscale.com/install.sh | sh
+          curl -fsSL https://tailscale.com/install.sh | sh || true
 
       - name: Restore backup files (safe)
         run: |
           if [ -f ./backup/backup.zip ]; then
-            sudo unzip -o ./backup/backup.zip -d /
+            sudo unzip -o ./backup/backup.zip -d / || true
             echo "VPS backup restored"
           else
             echo "No backup found, starting fresh"
@@ -46,10 +46,10 @@ jobs:
       - name: Restore Tailscale state (safe)
         run: |
           if [ -f ./backup/data/tailscaled.state ]; then
-            sudo mkdir -p /var/lib/tailscale
-            sudo cp -f ./backup/data/tailscaled.state /var/lib/tailscale/tailscaled.state
-            sudo chown root:root /var/lib/tailscale/tailscaled.state
-            sudo chmod 600 /var/lib/tailscale/tailscaled.state
+            sudo mkdir -p /var/lib/tailscale || true
+            sudo cp -f ./backup/data/tailscaled.state /var/lib/tailscale/tailscaled.state || true
+            sudo chown root:root /var/lib/tailscale/tailscaled.state || true
+            sudo chmod 600 /var/lib/tailscale/tailscaled.state || true
             echo "Tailscale state restored"
           else
             echo "No Tailscale state found, will start fresh"
@@ -62,15 +62,15 @@ jobs:
           sleep 5
           sudo tailscale up --authkey ${{ secrets.TAILSCALE_AUTHKEY }} --hostname=DarkNodes || echo "Tailscale already up"
           echo "Current Tailscale IPs:"
-          tailscale ip -4
+          tailscale ip -4 || true
 
       - name: Create user Darknodes with sudo
         run: |
           if ! id -u Darknodes >/dev/null 2>&1; then
-            sudo useradd -m -s /bin/bash Darknodes
-            echo "Darknodes:Darknodes" | sudo chpasswd
-            sudo usermod -aG sudo Darknodes
-            echo "Darknodes ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/Darknodes
+            sudo useradd -m -s /bin/bash Darknodes || true
+            echo "Darknodes:Darknodes" | sudo chpasswd || true
+            sudo usermod -aG sudo Darknodes || true
+            echo "Darknodes ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/Darknodes || true
           fi
 
       - name: Start tmate session for SSH access
@@ -83,26 +83,33 @@ jobs:
           echo ""
           echo "tmate SSH session info:"
           if [ -S $HOME/.tmate.sock/ssh ]; then
-            cat $HOME/.tmate.sock/ssh
+            cat $HOME/.tmate.sock/ssh || true
           else
             echo "tmate socket not ready"
           fi
 
       - name: Keep VPS alive
-        run: sleep 19800  # 5 hours 30 minutes
+        run: sleep 19800 || true  # 5 hours 30 minutes
 
       - name: Backup VPS data and Tailscale state
         run: |
-          sudo mkdir -p /opt/vps-backup/data
+          sudo mkdir -p /opt/vps-backup/data || true
           # Backup Tailscale state
           if [ -f /var/lib/tailscale/tailscaled.state ]; then
-            sudo cp -f /var/lib/tailscale/tailscaled.state /opt/vps-backup/data/
+            sudo cp -f /var/lib/tailscale/tailscaled.state /opt/vps-backup/data/ || true
           fi
           # Backup any other important directories (add your paths if needed)
-          # sudo cp -r /path/to/data /opt/vps-backup/data/
-          sudo chown -R $USER:$USER /opt/vps-backup
-          cd /opt/vps-backup
-          zip -r backup.zip ./*
+          # sudo cp -r /path/to/data /opt/vps-backup/data/ || true
+          sudo chown -R $USER:$USER /opt/vps-backup || true
+          cd /opt/vps-backup || true
+          zip -r backup.zip ./* || true
+
+      - name: Upload VPS backup artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vps-backup
+          path: /opt/vps-backup/backup.zip
+        continue-on-error: true          zip -r backup.zip ./*
 
       - name: Upload VPS backup artifact
         uses: actions/upload-artifact@v4

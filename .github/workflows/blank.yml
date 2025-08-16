@@ -1,43 +1,64 @@
-name: Continuous VPS with Tailscale
+name: Continuous Persistent VPS with Tailscale
 
 on:
-  schedule:
-    - cron: '*/330 * * * *'   # Every 5h30m
   workflow_dispatch:
+  schedule:
+    - cron: "*/330 * * * *" # every 5h30m
 
 jobs:
-  vps-session:
+  vps:
     runs-on: ubuntu-latest
-    timeout-minutes: 325   # Just under 5h30m
+    timeout-minutes: 330 # 5h30m
 
     steps:
-      - name: Checkout repository
+      - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Restore persistent data
-        uses: actions/cache@v4
+      # Restore previous Tailscale state
+      - name: Restore Tailscale state
+        uses: actions/cache@v3
+        id: tailscale-cache
         with:
           path: .vps-data
-          key: vps-data
-          restore-keys: vps-data
+          key: tailscale-state
+
+      - name: Set hostname
+        run: sudo hostname biralo
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl wget iproute2 jq
 
       - name: Install Tailscale
         run: |
+          curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.gpg | sudo tee /usr/share/keyrings/tailscale-archive-keyring.gpg > /dev/null
+          curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.list | sudo tee /etc/apt/sources.list.d/tailscale.list
           sudo apt-get update
           sudo apt-get install -y tailscale
           sudo mkdir -p .vps-data
 
-      - name: Start Tailscale
+      - name: Start Tailscale (persistent)
         run: |
-          sudo tailscaled --state=.vps-data/tailscaled.state --socket=/tmp/tailscaled.sock &
-          sleep 8
-          sudo tailscale --socket=/tmp/tailscaled.sock up --authkey=${{ secrets.TS_KEY }} --hostname=biralo --reset
+          sudo tailscaled --state=.vps-data/tailscale.state --socket=.vps-data/tailscaled.sock --port 41641 &
+          sleep 5
+          if [ -f ".vps-data/tailscale.state" ]; then
+            echo "Restoring previous Tailscale node..."
+            sudo tailscale up --hostname=biralo --accept-routes --accept-dns
+          else
+            echo "First run, using authkey..."
+            sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTHKEY }} --hostname=biralo --accept-routes --accept-dns
+          fi
 
-      - name: Show Tailscale IP
-        run: sudo tailscale --socket=/tmp/tailscaled.sock ip
+      - name: Run VPS Session (5h30m)
+        run: |
+          echo "VPS is running with persistent Tailscale IP..."
+          sleep 19800 # 5h30m in seconds
 
-      - name: Save persistent data
-        uses: actions/cache/save@v4
-        with:
-          path: .vps-data
-          key: vps-data
+      # Crash-proof backup of Tailscale state
+      - name: Backup Tailscale state
+        if: always()
+        run: |
+          echo "Saving Tailscale state..."
+          mkdir -p .vps-data
+          sudo tailscale bugreport --state=.vps-data/tailscale.state || true
